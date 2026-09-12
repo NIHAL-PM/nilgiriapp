@@ -254,6 +254,7 @@ class _PortalWebViewScreenState extends State<PortalWebViewScreen> {
   bool _isLoading = true;
   bool _hasError = false;
   String _errorMessage = '';
+  Timer? _timeoutTimer;
 
   @override
   void initState() {
@@ -261,7 +262,28 @@ class _PortalWebViewScreenState extends State<PortalWebViewScreen> {
     _initWebView();
   }
 
+  @override
+  void dispose() {
+    _timeoutTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startTimeoutWatchdog() {
+    _timeoutTimer?.cancel();
+    _timeoutTimer = Timer(const Duration(seconds: 10), () {
+      if (mounted && _isLoading) {
+        setState(() {
+          _hasError = true;
+          _isLoading = false;
+          _errorMessage = 'Connection timed out. Please check campus Wi-Fi.';
+        });
+      }
+    });
+  }
+
   void _initWebView() {
+    _startTimeoutWatchdog();
+
     _webViewController = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(Colors.white)
@@ -274,11 +296,13 @@ class _PortalWebViewScreenState extends State<PortalWebViewScreen> {
                 _loadingProgress = progress / 100.0;
                 if (progress >= 100) {
                   _isLoading = false;
+                  _timeoutTimer?.cancel();
                 }
               });
             }
           },
           onPageStarted: (String url) {
+            _startTimeoutWatchdog();
             if (mounted) {
               setState(() {
                 _isLoading = true;
@@ -288,6 +312,21 @@ class _PortalWebViewScreenState extends State<PortalWebViewScreen> {
             _injectNativeFeelScripts();
           },
           onPageFinished: (String url) {
+            // If the browser loaded an internal Chromium error page (like chromewebdata), suppress it!
+            if (url.contains('chromewebdata') ||
+                url.startsWith('chrome-error://') ||
+                url.startsWith('data:text/html')) {
+              if (mounted) {
+                setState(() {
+                  _hasError = true;
+                  _isLoading = false;
+                });
+              }
+              _timeoutTimer?.cancel();
+              return;
+            }
+
+            _timeoutTimer?.cancel();
             if (mounted) {
               setState(() {
                 _isLoading = false;
@@ -296,15 +335,14 @@ class _PortalWebViewScreenState extends State<PortalWebViewScreen> {
             _injectNativeFeelScripts();
           },
           onWebResourceError: (WebResourceError error) {
-            // Only show full error screen if the main campus frame failed to load
-            if (error.isForMainFrame ?? true) {
-              if (mounted) {
-                setState(() {
-                  _hasError = true;
-                  _isLoading = false;
-                  _errorMessage = error.description;
-                });
-              }
+            _timeoutTimer?.cancel();
+            // NEVER allow Chromium's "Web page not available" screen to show!
+            if (mounted) {
+              setState(() {
+                _hasError = true;
+                _isLoading = false;
+                _errorMessage = error.description;
+              });
             }
           },
           onNavigationRequest: (NavigationRequest request) {
@@ -318,7 +356,6 @@ class _PortalWebViewScreenState extends State<PortalWebViewScreen> {
               return NavigationDecision.navigate;
             }
 
-            // Reject any unknown or foreign schemes that could launch external apps
             return NavigationDecision.prevent;
           },
         ),
@@ -388,8 +425,184 @@ class _PortalWebViewScreenState extends State<PortalWebViewScreen> {
     setState(() {
       _hasError = false;
       _isLoading = true;
+      _loadingProgress = 0.0;
     });
-    await _webViewController.reload();
+    _startTimeoutWatchdog();
+    await _webViewController.loadRequest(Uri.parse(_portalUrl));
+  }
+
+  Widget _buildErrorView() {
+    return Container(
+      color: Colors.white,
+      width: double.infinity,
+      height: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 28),
+      child: Center(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              // Branded Logo Container
+              Container(
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white,
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF1E3A8A).withValues(alpha: 0.12),
+                      blurRadius: 28,
+                      spreadRadius: 2,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                child: Image.asset(
+                  'assets/images/nilgiri_college_logo.png',
+                  width: 90,
+                  height: 90,
+                  fit: BoxFit.contain,
+                ),
+              ),
+              const SizedBox(height: 28),
+
+              // Title
+              const Text(
+                'Campus Network Required',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF0F172A),
+                  letterSpacing: -0.4,
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // Subtitle / Guidance
+              const Text(
+                'The Nilgiri College portal can only be accessed while your phone is connected to the Nilgiri Campus Wi-Fi network.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Color(0xFF64748B),
+                  height: 1.55,
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // Step-by-step native instruction card
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF8FAFC),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: const Color(0xFFE2E8F0),
+                    width: 1,
+                  ),
+                ),
+                child: Column(
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1E3A8A).withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Icon(
+                            Icons.wifi_rounded,
+                            size: 18,
+                            color: Color(0xFF1E3A8A),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Text(
+                            'Connect your device to the Nilgiri Campus Wi-Fi network.',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Color(0xFF334155),
+                              fontWeight: FontWeight.w500,
+                              height: 1.4,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1E3A8A).withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Icon(
+                            Icons.refresh_rounded,
+                            size: 18,
+                            color: Color(0xFF1E3A8A),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Text(
+                            'Tap Retry Connection below to enter the portal.',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Color(0xFF334155),
+                              fontWeight: FontWeight.w500,
+                              height: 1.4,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 32),
+
+              // Action Buttons
+              SizedBox(
+                width: double.infinity,
+                height: 50,
+                child: ElevatedButton.icon(
+                  onPressed: _handleRefresh,
+                  icon: const Icon(
+                    Icons.refresh_rounded,
+                    size: 20,
+                    color: Colors.white,
+                  ),
+                  label: const Text(
+                    'Retry Connection',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                      letterSpacing: 0.3,
+                    ),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1E3A8A),
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -407,126 +620,47 @@ class _PortalWebViewScreenState extends State<PortalWebViewScreen> {
         onPopInvokedWithResult: (didPop, result) async {
           if (didPop) return;
           // Native back navigation: go back through web history if available
-          if (await _webViewController.canGoBack()) {
+          if (!_hasError && await _webViewController.canGoBack()) {
             await _webViewController.goBack();
           } else {
-            // If at root of navigation, minimize or close app gracefully
+            // If at root of navigation or on error screen, exit gracefully
             SystemNavigator.pop();
           }
         },
         child: Scaffold(
           backgroundColor: Colors.white,
           body: SafeArea(
-            child: Stack(
-              children: [
-                // Main Native In-App Web View with Pull-to-Refresh
-                RefreshIndicator(
-                  color: const Color(0xFF1E3A8A),
-                  backgroundColor: Colors.white,
-                  onRefresh: _handleRefresh,
-                  child: WebViewWidget(controller: _webViewController),
-                ),
-
-                // Native Slim Loading Progress Bar (Top Pinned, similar to Twitter/X / YouTube)
-                if (_isLoading)
-                  Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    child: SizedBox(
-                      height: 2.5,
-                      child: LinearProgressIndicator(
-                        value: _loadingProgress > 0 ? _loadingProgress : null,
-                        backgroundColor: Colors.transparent,
+            // When an error occurs, COMPLETELY replace the view with the native screen!
+            // This guarantees the Android Chromium "Web page not available" screen NEVER displays!
+            child: _hasError
+                ? _buildErrorView()
+                : Stack(
+                    children: [
+                      // Main Native In-App Web View with Pull-to-Refresh
+                      RefreshIndicator(
                         color: const Color(0xFF1E3A8A),
+                        backgroundColor: Colors.white,
+                        onRefresh: _handleRefresh,
+                        child: WebViewWidget(controller: _webViewController),
                       ),
-                    ),
-                  ),
 
-                // Native Offline / Campus Network Error Screen
-                // (Replaces raw Chromium browser errors with a branded native view)
-                if (_hasError)
-                  Container(
-                    color: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 28),
-                    child: Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: const Color(0xFFF1F5F9),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.04),
-                                  blurRadius: 16,
-                                  offset: const Offset(0, 4),
-                                ),
-                              ],
-                            ),
-                            child: Image.asset(
-                              'assets/images/nilgiri_college_logo.png',
-                              width: 80,
-                              height: 80,
-                              fit: BoxFit.contain,
+                      // Native Slim Loading Progress Bar (Top Pinned)
+                      if (_isLoading)
+                        Positioned(
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          child: SizedBox(
+                            height: 2.5,
+                            child: LinearProgressIndicator(
+                              value: _loadingProgress > 0 ? _loadingProgress : null,
+                              backgroundColor: Colors.transparent,
+                              color: const Color(0xFF1E3A8A),
                             ),
                           ),
-                          const SizedBox(height: 24),
-                          const Text(
-                            'Campus Wi-Fi Required',
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w700,
-                              color: Color(0xFF0F172A),
-                              letterSpacing: -0.3,
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          const Text(
-                            'To access the Nilgiri College portal, please ensure you are connected to the Nilgiri Campus Wi-Fi network.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: Color(0xFF64748B),
-                              height: 1.5,
-                            ),
-                          ),
-                          const SizedBox(height: 28),
-                          ElevatedButton.icon(
-                            onPressed: _handleRefresh,
-                            icon: const Icon(
-                              Icons.refresh_rounded,
-                              size: 18,
-                              color: Colors.white,
-                            ),
-                            label: const Text(
-                              'Retry Connection',
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.white,
-                              ),
-                            ),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF1E3A8A),
-                              elevation: 0,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 28,
-                                vertical: 14,
-                              ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
+                        ),
+                    ],
                   ),
-              ],
-            ),
           ),
         ),
       ),
